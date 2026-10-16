@@ -1,6 +1,13 @@
 // ==================================================
-// ドット絵レーシングゲーム Complete Code (分身アイテム別枠出現版)
+// ドット絵レーシングゲーム Complete Code (描画順序最適化版)
 // ==================================================
+
+// --- アスペクト比固定＆レスポンシブ拡大縮小用変数 ---
+const GAME_WIDTH = 400;
+const GAME_HEIGHT = 700;
+let gameScale = 1;
+let gameOffsetX = 0;
+let gameOffsetY = 0;
 
 // --------------------------------------------------
 // 1. 変数・アセット管理
@@ -45,7 +52,7 @@ const ITEM_ANIM_SPEED = 6;
 const EFFECT_ANIM_SPEED = 5;
 
 // ゲーム状態管理
-let gameState = "LOADING"; // LOADING -> HOWTO -> SELECT -> START -> PLAY -> GAMEOVER
+let gameState = "LOADING"; // LOADING -> TITLE -> HOWTO -> SELECT -> START -> PLAY -> GAMEOVER
 let selectedChar = 0; // 0: アイテム型(yellow), 1: 分身型(purple), 2: ハード型(orange)
 let charTypes = ['yellow', 'purple', 'orange'];
 let charNames = ["アイテムマスター", "分身ドライブ", "ハードレーサー"];
@@ -62,7 +69,6 @@ let coinX, coinY;
 let coinSize = 25;
 let coinSpeed = 5;
 
-// アイテム管理配列（複数アイテムの同時出現に対応）
 let items = [];
 
 let boostTimer = 0;
@@ -70,12 +76,25 @@ let barrierTimer = 0;
 let cloneTimer = 0;
 
 let score = 0;
-let highScore = 0;        // 端末ごとの最高スコア
-let isNewRecord = false;   // ハイスコア更新フラグ
+let highScore = 0;
+let isNewRecord = false;
 let justStarted = false;
 let gameOverTimer = 0;
 
 let effects = [];
+
+// --- タイトルデモ用状態変数 ---
+let demoCharIndex = 0;
+let demoCarX = GAME_WIDTH / 2;
+let demoCarY = GAME_HEIGHT - 130;
+let demoTargetX = GAME_WIDTH / 2;
+let demoTimer = 0;
+let demoObstacles = [];
+let demoCoins = [];
+let demoItems = [];
+let demoBoostTimer = 0;
+let demoBarrierTimer = 0;
+let demoCloneTimer = 0;
 
 // サウンド用
 let bgmOsc;
@@ -84,25 +103,23 @@ let bgmNotes = [261.63, 329.63, 392.00, 523.25, 392.00, 329.63];
 let bgmIndex = 0;
 
 // --------------------------------------------------
-// 2. 初期設定（p5.js 2.0 対応 setup）
+// 2. 初期設定（setup）
 // --------------------------------------------------
 async function setup() {
   createCanvas(windowWidth, windowHeight);
   rectMode(CENTER);
   imageMode(CENTER);
   noSmooth();
+  calculateScale();
 
-  // 端末のローカルストレージから最高記録を読み込み
   let savedHighScore = localStorage.getItem('racing_high_score');
   if (savedHighScore !== null) {
     highScore = parseInt(savedHighScore, 10);
   }
 
-  // サウンド初期化
   bgmOsc = new p5.Oscillator('square');
   bgmOsc.amp(0.05);
 
-  // アセット非同期読み込み
   carSheets.yellow    = await loadImage('New Piskel (2).png');
   carSheets.purple    = await loadImage('New Piskel (3).png');
   carSheets.orange    = await loadImage('New Piskel (4).png');
@@ -116,7 +133,6 @@ async function setup() {
   nitroActiveSheet   = await loadImage('New Piskel.nitro activitying.png');
   cloneItemSheet     = await loadImage('New Piskel.clone.png');
 
-  // コマ切り出し処理
   let allCarTypes = ['yellow', 'purple', 'orange', 'red'];
   for (let type of allCarTypes) {
     for (let i = 0; i < CAR_COUNTS[type]; i++) {
@@ -167,16 +183,32 @@ async function setup() {
   }
 
   resetGame();
-  gameState = "HOWTO";
+  gameState = "TITLE";
+}
+
+function calculateScale() {
+  let scaleX = width / GAME_WIDTH;
+  let scaleY = height / GAME_HEIGHT;
+  gameScale = min(scaleX, scaleY);
+  gameOffsetX = (width - GAME_WIDTH * gameScale) / 2;
+  gameOffsetY = (height - GAME_HEIGHT * gameScale) / 2;
 }
 
 // --------------------------------------------------
-// 3. 描画・メイン処理（draw）
+// 3. メイン描画（draw）
 // --------------------------------------------------
 function draw() {
-  background(50);
+  background(20);
 
-  // BGM制御
+  push();
+  translate(gameOffsetX, gameOffsetY);
+  scale(gameScale);
+
+  fill(50);
+  rectMode(CORNER);
+  rect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+  rectMode(CENTER);
+
   if (audioStarted && gameState === "PLAY") {
     let tempo = (boostTimer > 0) ? 8 : 12;
     if (frameCount % tempo === 0) {
@@ -191,7 +223,10 @@ function draw() {
     fill(255);
     textSize(20);
     textAlign(CENTER, CENTER);
-    text("ローディング中...", width / 2, height / 2);
+    text("ローディング中...", GAME_WIDTH / 2, GAME_HEIGHT / 2);
+
+  } else if (gameState === "TITLE") {
+    drawTitleScreen();
 
   } else if (gameState === "HOWTO") {
     drawHowToPlay();
@@ -203,11 +238,11 @@ function draw() {
     fill(255);
     textSize(26);
     textAlign(CENTER, CENTER);
-    text(charNames[selectedChar] + " で出撃！", width / 2, height / 3);
+    text(charNames[selectedChar] + " で出撃！", GAME_WIDTH / 2, GAME_HEIGHT / 3);
 
     let carTypeKey = charTypes[selectedChar];
     let frameIdx = floor(frameCount / CAR_ANIM_SPEED) % CAR_COUNTS[carTypeKey];
-    image(carFrames[carTypeKey][frameIdx], width / 2, height / 3 + 60, 64, 64);
+    image(carFrames[carTypeKey][frameIdx], GAME_WIDTH / 2, GAME_HEIGHT / 3 + 60, 64, 64);
 
     textSize(14);
     fill(200);
@@ -217,345 +252,544 @@ function draw() {
     } else if (selectedChar === 1) {
       desc = "特徴: 通常アイテム枠とは【別枠】で\n専用「分身アイテム」が独立出現する！";
     } else if (selectedChar === 2) {
-      desc = "特徴: 敵車両の数が激増（2〜4台）！\n難易度は高いが獲得スコアが常に2倍！";
+      desc = "特徴: 敵車両の数が激増（2〜4台）！\n難易度高いが獲得スコアが常に2倍！";
     }
-    text(desc, width / 2, height / 2 + 30);
+    text(desc, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 30);
 
     textSize(18);
     fill(255);
-    text("画面タップ または キー入力でスタート！", width / 2, height * 0.75);
+    text("画面タップ または キー入力でスタート！", GAME_WIDTH / 2, GAME_HEIGHT * 0.75);
 
   } else if (gameState === "PLAY") {
+    updateAndDrawPlay();
 
-    // --- ① パワーアップタイマー制御 ---
-    if (boostTimer > 0) {
-      boostTimer--;
-      playerSpeed = basePlayerSpeed * 1.6;
+  } else if (gameState === "GAMEOVER") {
+    drawGameOverScreen();
+  }
+
+  pop();
+}
+
+// --------------------------------------------------
+// 4. タイトル画面（中央線を最背面に描画）
+// --------------------------------------------------
+function drawTitleScreen() {
+  demoTimer++;
+
+  if (demoTimer > 600) {
+    demoTimer = 0;
+    demoCharIndex = (demoCharIndex + 1) % 3;
+    demoObstacles = [];
+    demoCoins = [];
+    demoItems = [];
+    demoCarX = GAME_WIDTH / 2;
+    demoTargetX = GAME_WIDTH / 2;
+    demoBoostTimer = 0;
+    demoBarrierTimer = 0;
+    demoCloneTimer = 0;
+  }
+
+  if (demoBoostTimer > 0) demoBoostTimer--;
+  if (demoBarrierTimer > 0) demoBarrierTimer--;
+  if (demoCloneTimer > 0) demoCloneTimer--;
+
+  // ★1. 道路の中央線を「一番下（最背面）」に描画
+  stroke(255, 80); // 車線が目立ちすぎないよう透明度を少し抑える
+  strokeWeight(3);
+  let scrollSpeed = (demoBoostTimer > 0) ? 6 : 4;
+  let lineOffset = (frameCount * scrollSpeed) % 40;
+  for (let y = -40; y < GAME_HEIGHT + 40; y += 40) {
+    line(GAME_WIDTH / 2, y + lineOffset, GAME_WIDTH / 2, y + lineOffset + 20);
+  }
+  noStroke();
+
+  let baseSpeed = (demoBoostTimer > 0) ? 5 : 3.5;
+
+  // --- スポーン処理 ---
+  let obstacleInterval = (demoCharIndex === 2) ? 70 : 120;
+  if (frameCount % obstacleInterval === 0) {
+    demoObstacles.push({ x: random(60, GAME_WIDTH - 60), y: -60, speed: baseSpeed + 0.5 });
+  }
+
+  if (frameCount % 70 === 0) {
+    demoCoins.push({ x: random(60, GAME_WIDTH - 60), y: -40, speed: baseSpeed });
+  }
+
+  let itemInterval = (demoCharIndex === 0) ? 140 : 220;
+  if (frameCount % itemInterval === 0) {
+    let type = "BOOST";
+    if (demoCharIndex === 1) {
+      type = "CLONE";
     } else {
-      playerSpeed = basePlayerSpeed;
+      type = random(["BOOST", "BARRIER"]);
     }
+    demoItems.push({ x: random(60, GAME_WIDTH - 60), y: -40, speed: baseSpeed, type: type });
+  }
 
-    if (barrierTimer > 0) barrierTimer--;
-    if (cloneTimer > 0) cloneTimer--;
-
-    // --- ② プレイヤー移動制御 ---
-    let moveLeft = keyIsDown(LEFT_ARROW) || keyIsDown(65) || keyIsDown(97) || (keyIsPressed && (key === 'a' || key === 'A'));
-    let moveRight = keyIsDown(RIGHT_ARROW) || keyIsDown(68) || keyIsDown(100) || (keyIsPressed && (key === 'd' || key === 'D'));
-
-    if (mouseIsPressed && !justStarted) {
-      if (mouseX < width / 2) moveLeft = true;
-      else moveRight = true;
+  // --- AI操縦計算 ---
+  let dangerObstacle = null;
+  for (let obs of demoObstacles) {
+    if (obs.y < demoCarY && demoCarY - obs.y < 240 && abs(demoCarX - obs.x) < 60) {
+      dangerObstacle = obs;
+      break;
     }
+  }
 
-    if (moveLeft) playerX -= playerSpeed;
-    if (moveRight) playerX += playerSpeed;
-
-    if (!mouseIsPressed) justStarted = false;
-
-    playerX = constrain(playerX, 40, width - 40);
-
-    // --- ③ 障害物の目標数管理 ---
-    let targetObstacleCount = 1;
-    if (selectedChar === 2) {
-      targetObstacleCount = (score >= 500) ? 4 : 2;
+  if (dangerObstacle) {
+    if (demoBarrierTimer > 0) {
+      demoTargetX = dangerObstacle.x;
     } else {
-      targetObstacleCount = (score >= 500) ? 3 : 1;
+      if (dangerObstacle.x < GAME_WIDTH / 2) {
+        demoTargetX = min(GAME_WIDTH - 70, dangerObstacle.x + 90);
+      } else {
+        demoTargetX = max(70, dangerObstacle.x - 90);
+      }
+    }
+  } else {
+    let closestItem = null;
+    let minDist = 250;
+
+    for (let c of demoCoins) {
+      let d = dist(demoCarX, demoCarY, c.x, c.y);
+      if (d < minDist) { minDist = d; closestItem = c; }
+    }
+    for (let itm of demoItems) {
+      let d = dist(demoCarX, demoCarY, itm.x, itm.y);
+      if (d < minDist) { minDist = d; closestItem = itm; }
     }
 
-    while (obstacles.length < targetObstacleCount) {
-      let newObs = getSafeObstaclePosition(obstacles);
-      obstacles.push(newObs);
+    if (closestItem) {
+      demoTargetX = closestItem.x;
+    }
+  }
+
+  demoCarX = lerp(demoCarX, demoTargetX, 0.045);
+  demoCarX = constrain(demoCarX, 40, GAME_WIDTH - 40);
+
+  // ★2. 障害物（中央線の上に重ねて描画）
+  for (let i = demoObstacles.length - 1; i >= 0; i--) {
+    let obs = demoObstacles[i];
+    obs.y += obs.speed;
+    let rIdx = floor(frameCount / CAR_ANIM_SPEED) % CAR_COUNTS['red'];
+
+    push();
+    translate(obs.x, obs.y);
+    rotate(PI);
+    image(carFrames['red'][rIdx], 0, 0, 60, 60);
+    pop();
+
+    if (demoBarrierTimer > 0 && dist(demoCarX, demoCarY, obs.x, obs.y) < 45) {
+      effects.push(new VisualEffect(obs.x, obs.y, coinEffectFrames, 60));
+      demoObstacles.splice(i, 1);
+      demoBarrierTimer = 0;
+    } else if (obs.y > GAME_HEIGHT + 50) {
+      demoObstacles.splice(i, 1);
+    }
+  }
+
+  // ★3. コイン（中央線の上に重ねて描画）
+  for (let i = demoCoins.length - 1; i >= 0; i--) {
+    let c = demoCoins[i];
+    c.y += c.speed;
+    let cIdx = floor(frameCount / ITEM_ANIM_SPEED) % TOTAL_COIN_FRAMES;
+    image(coinFrames[cIdx], c.x, c.y, 28, 28);
+
+    let hit = dist(demoCarX, demoCarY, c.x, c.y) < 35;
+    if (demoCloneTimer > 0) {
+      if (dist(demoCarX - 110, demoCarY, c.x, c.y) < 35 || dist(demoCarX + 110, demoCarY, c.x, c.y) < 35) {
+        hit = true;
+      }
     }
 
-    // --- ④ 障害物（赤・対向車）の移動と判定 ---
-    for (let i = 0; i < obstacles.length; i++) {
-      let obs = obstacles[i];
-      obs.y += obstacleSpeed;
+    if (hit) {
+      effects.push(new VisualEffect(c.x, c.y, coinEffectFrames, 40));
+      demoCoins.splice(i, 1);
+    } else if (c.y > GAME_HEIGHT + 40) {
+      demoCoins.splice(i, 1);
+    }
+  }
 
-      let redFrameIdx = floor(frameCount / CAR_ANIM_SPEED) % CAR_COUNTS['red'];
-      push();
-      translate(obs.x, obs.y);
-      rotate(PI);
-      image(carFrames['red'][redFrameIdx], 0, 0, 64, 64);
-      pop();
+  // ★4. アイテム（中央線の上に重ねて描画）
+  for (let i = demoItems.length - 1; i >= 0; i--) {
+    let itm = demoItems[i];
+    itm.y += itm.speed;
 
-      if (obs.y > height + 40) {
+    let imgFrames = barrierItemFrames;
+    if (itm.type === "BOOST") imgFrames = nitroItemFrames;
+    if (itm.type === "CLONE") imgFrames = cloneItemFrames;
+
+    let idx = floor(frameCount / ITEM_ANIM_SPEED) % imgFrames.length;
+    image(imgFrames[idx], itm.x, itm.y, 36, 36);
+
+    let hit = dist(demoCarX, demoCarY, itm.x, itm.y) < 35;
+    if (demoCloneTimer > 0) {
+      if (dist(demoCarX - 110, demoCarY, itm.x, itm.y) < 35 || dist(demoCarX + 110, demoCarY, itm.x, itm.y) < 35) {
+        hit = true;
+      }
+    }
+
+    if (hit) {
+      if (itm.type === "BOOST") demoBoostTimer = 180;
+      if (itm.type === "BARRIER") demoBarrierTimer = 240;
+      if (itm.type === "CLONE") demoCloneTimer = 240;
+      demoItems.splice(i, 1);
+    } else if (itm.y > GAME_HEIGHT + 40) {
+      demoItems.splice(i, 1);
+    }
+  }
+
+  // ★5. 自機 ＆ パワーアップ（一番上付近に描画）
+  let currentDemoType = charTypes[demoCharIndex];
+  let carIdx = floor(frameCount / CAR_ANIM_SPEED) % CAR_COUNTS[currentDemoType];
+  let currentImg = carFrames[currentDemoType][carIdx];
+
+  if (demoBoostTimer > 0) {
+    let loopLen = TOTAL_NITRO_ACTIVE_FRAMES - LOOP_START_INDEX;
+    let nitroIdx = LOOP_START_INDEX + (floor(frameCount / 4) % loopLen);
+    image(nitroActiveFrames[nitroIdx], demoCarX, demoCarY + 35, 48, 64);
+  }
+
+  if (demoCloneTimer > 0) {
+    push();
+    tint(255, 160);
+    image(currentImg, demoCarX - 110, demoCarY, 60, 60);
+    image(currentImg, demoCarX + 110, demoCarY, 60, 60);
+    pop();
+  }
+
+  image(currentImg, demoCarX, demoCarY, 60, 60);
+
+  if (demoBarrierTimer > 0) {
+    let bIdx = floor(frameCount / ITEM_ANIM_SPEED) % BARRIER_ACTIVE_TOTAL;
+    push();
+    tint(255, 210);
+    image(barrierActiveFrames[bIdx], demoCarX, demoCarY, 80, 80);
+    pop();
+  }
+
+  for (let i = effects.length - 1; i >= 0; i--) {
+    effects[i].update();
+    effects[i].display();
+    if (effects[i].isFinished) effects.splice(i, 1);
+  }
+
+  // ★6. UIオーバーレイ
+  fill(0, 110);
+  rectMode(CORNER);
+  rect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+  rectMode(CENTER);
+
+  textAlign(CENTER, CENTER);
+  fill(255, 215, 0);
+  stroke(0);
+  strokeWeight(6);
+  textSize(32);
+  text("インフィニット", GAME_WIDTH / 2, GAME_HEIGHT * 0.20);
+  textSize(38);
+  fill(255, 50, 50);
+  text("ドライブ", GAME_WIDTH / 2, GAME_HEIGHT * 0.28);
+  noStroke();
+
+  fill(0, 220, 255);
+  textSize(15);
+  text("DEMO: " + charNames[demoCharIndex], GAME_WIDTH / 2, GAME_HEIGHT * 0.35);
+
+  let activeEffectText = "";
+  if (demoBoostTimer > 0) activeEffectText = "🚀 SPEED UP!";
+  else if (demoBarrierTimer > 0) activeEffectText = "🛡️ BARRIER!";
+  else if (demoCloneTimer > 0) activeEffectText = "👥 CLONE ATK!";
+
+  if (activeEffectText !== "") {
+    fill(255, 215, 0);
+    textSize(16);
+    text(activeEffectText, GAME_WIDTH / 2, GAME_HEIGHT * 0.39);
+  }
+
+  if (floor(frameCount / 30) % 2 === 0) {
+    fill(255);
+    textSize(20);
+    text("タップでスタート", GAME_WIDTH / 2, GAME_HEIGHT * 0.74);
+  }
+
+  fill(200);
+  textSize(14);
+  text("🏆 ハイスコア: " + highScore, GAME_WIDTH / 2, GAME_HEIGHT * 0.83);
+}
+
+// --------------------------------------------------
+// 5. ゲームプレイ画面更新
+// --------------------------------------------------
+function updateAndDrawPlay() {
+  if (boostTimer > 0) {
+    boostTimer--;
+    playerSpeed = basePlayerSpeed * 1.6;
+  } else {
+    playerSpeed = basePlayerSpeed;
+  }
+
+  if (barrierTimer > 0) barrierTimer--;
+  if (cloneTimer > 0) cloneTimer--;
+
+  // 背景道路の中央線を背面に描画
+  stroke(255, 100);
+  strokeWeight(4);
+  line(GAME_WIDTH / 2, 0, GAME_WIDTH / 2, GAME_HEIGHT);
+  noStroke();
+
+  let moveLeft = keyIsDown(LEFT_ARROW) || keyIsDown(65) || keyIsDown(97) || (keyIsPressed && (key === 'a' || key === 'A'));
+  let moveRight = keyIsDown(RIGHT_ARROW) || keyIsDown(68) || keyIsDown(100) || (keyIsPressed && (key === 'd' || key === 'D'));
+
+  let gameMouseX = (mouseX - gameOffsetX) / gameScale;
+  if (mouseIsPressed && !justStarted) {
+    if (gameMouseX < GAME_WIDTH / 2) moveLeft = true;
+    else moveRight = true;
+  }
+
+  if (moveLeft) playerX -= playerSpeed;
+  if (moveRight) playerX += playerSpeed;
+
+  if (!mouseIsPressed) justStarted = false;
+
+  playerX = constrain(playerX, 40, GAME_WIDTH - 40);
+
+  let targetObstacleCount = (selectedChar === 2) ? ((score >= 500) ? 4 : 2) : ((score >= 500) ? 3 : 1);
+
+  while (obstacles.length < targetObstacleCount) {
+    let newObs = getSafeObstaclePosition(obstacles);
+    obstacles.push(newObs);
+  }
+
+  for (let i = 0; i < obstacles.length; i++) {
+    let obs = obstacles[i];
+    obs.y += obstacleSpeed;
+
+    let redFrameIdx = floor(frameCount / CAR_ANIM_SPEED) % CAR_COUNTS['red'];
+    push();
+    translate(obs.x, obs.y);
+    rotate(PI);
+    image(carFrames['red'][redFrameIdx], 0, 0, 64, 64);
+    pop();
+
+    if (obs.y > GAME_HEIGHT + 40) {
+      let resetPos = getSafeObstaclePosition(obstacles, i);
+      obs.x = resetPos.x;
+      obs.y = resetPos.y;
+
+      let baseAdd = (selectedChar === 2) ? 20 : 10;
+      if (boostTimer > 0) baseAdd *= 2;
+      score += baseAdd;
+
+      if (cloneTimer > 0) {
+        let leftCloneX = playerX - 110;
+        let rightCloneX = playerX + 110;
+        if (abs(obs.x - leftCloneX) > playerSize) score += 10;
+        if (abs(obs.x - rightCloneX) > playerSize) score += 10;
+      }
+
+      obstacleSpeed += 0.15;
+    }
+
+    let d = dist(playerX, playerY, obs.x, obs.y);
+    if (d < (playerSize / 2 + 20)) {
+      if (barrierTimer > 0) {
+        playBarrierBreakSound();
+        effects.push(new VisualEffect(obs.x, obs.y, coinEffectFrames, 60));
         let resetPos = getSafeObstaclePosition(obstacles, i);
         obs.x = resetPos.x;
         obs.y = resetPos.y;
-
-        let baseAdd = (selectedChar === 2) ? 20 : 10;
-        if (boostTimer > 0) baseAdd *= 2;
-        score += baseAdd;
-
-        if (cloneTimer > 0) {
-          let leftCloneX = playerX - 110;
-          let rightCloneX = playerX + 110;
-          if (abs(obs.x - leftCloneX) > playerSize) score += 10;
-          if (abs(obs.x - rightCloneX) > playerSize) score += 10;
-        }
-
-        obstacleSpeed += 0.15;
-      }
-
-      let d = dist(playerX, playerY, obs.x, obs.y);
-      if (d < (playerSize / 2 + 20)) {
-        if (barrierTimer > 0) {
-          playBarrierBreakSound();
-          effects.push(new VisualEffect(obs.x, obs.y, coinEffectFrames, 60));
-          let resetPos = getSafeObstaclePosition(obstacles, i);
-          obs.x = resetPos.x;
-          obs.y = resetPos.y;
-          score += 20;
+        score += 20;
+      } else {
+        playCrashSound();
+        stopBGM();
+        
+        if (score > highScore) {
+          highScore = score;
+          isNewRecord = true;
+          localStorage.setItem('racing_high_score', highScore);
         } else {
-          playCrashSound();
-          stopBGM();
-          
-          if (score > highScore) {
-            highScore = score;
-            isNewRecord = true;
-            localStorage.setItem('racing_high_score', highScore);
-          } else {
-            isNewRecord = false;
-          }
-
-          gameState = "GAMEOVER";
-          gameOverTimer = 0;
+          isNewRecord = false;
         }
+
+        gameState = "GAMEOVER";
+        gameOverTimer = 0;
       }
     }
+  }
 
-    // --- ⑤ コインの処理 ---
-    coinY += coinSpeed;
-    if (coinY > height + 40) spawnCoin();
+  coinY += coinSpeed;
+  if (coinY > GAME_HEIGHT + 40) spawnCoin();
 
-    let coinFrameIdx = floor(frameCount / ITEM_ANIM_SPEED) % TOTAL_COIN_FRAMES;
-    image(coinFrames[coinFrameIdx], coinX, coinY, 32, 32);
+  let coinFrameIdx = floor(frameCount / ITEM_ANIM_SPEED) % TOTAL_COIN_FRAMES;
+  image(coinFrames[coinFrameIdx], coinX, coinY, 32, 32);
 
-    let hitCoin = checkHitWithClones(coinX, coinY, coinSize);
-    if (hitCoin) {
-      playCoinSound();
-      effects.push(new VisualEffect(coinX, coinY, coinEffectFrames, 48));
-      score += 50;
-      spawnCoin();
+  let hitCoin = checkHitWithClones(coinX, coinY, coinSize);
+  if (hitCoin) {
+    playCoinSound();
+    effects.push(new VisualEffect(coinX, coinY, coinEffectFrames, 48));
+    score += 50;
+    spawnCoin();
+  }
+
+  let itemSpawnInterval = (selectedChar === 0) ? 180 : 300;
+  if (frameCount % itemSpawnInterval === 0) {
+    spawnNormalItem();
+  }
+
+  if (selectedChar === 1 && frameCount % 360 === 0) {
+    if (random() < 0.7) spawnCloneItem();
+  }
+
+  for (let i = items.length - 1; i >= 0; i--) {
+    let itm = items[i];
+    itm.y += itm.speed;
+
+    if (itm.type === "BOOST") {
+      let idx = floor(frameCount / ITEM_ANIM_SPEED) % TOTAL_NITRO_ITEM_FRAMES;
+      image(nitroItemFrames[idx], itm.x, itm.y, 40, 40);
+    } else if (itm.type === "BARRIER") {
+      let idx = floor(frameCount / ITEM_ANIM_SPEED) % BARRIER_ITEM_TOTAL;
+      image(barrierItemFrames[idx], itm.x, itm.y, 40, 40);
+    } else if (itm.type === "CLONE") {
+      let idx = floor(frameCount / ITEM_ANIM_SPEED) % TOTAL_CLONE_ITEM_FRAMES;
+      image(cloneItemFrames[idx], itm.x, itm.y, 40, 40);
     }
 
-    // --- ⑥ パワーアップアイテムの出現タイマー＆移動処理 ---
-    // 枠1: 通常アイテムのタイマー処理（キャラ0は頻度高め）
-    let itemSpawnInterval = (selectedChar === 0) ? 180 : 300; // フレーム単位
-    if (frameCount % itemSpawnInterval === 0) {
-      spawnNormalItem();
+    let hitItem = checkHitWithClones(itm.x, itm.y, 25);
+    if (hitItem) {
+      playItemSound();
+      if (itm.type === "BOOST") boostTimer = 180;
+      else if (itm.type === "BARRIER") barrierTimer = 180;
+      else if (itm.type === "CLONE") cloneTimer = 300;
+
+      items.splice(i, 1);
+    } else if (itm.y > GAME_HEIGHT + 40) {
+      items.splice(i, 1);
     }
+  }
 
-    // 枠2: 分身キャラ（キャラ1）専用の【別枠】タイマー処理
-    if (selectedChar === 1 && frameCount % 360 === 0) {
-      if (random() < 0.7) {
-        spawnCloneItem();
-      }
-    }
+  let myTypeKey = charTypes[selectedChar];
+  let myCarIdx = floor(frameCount / CAR_ANIM_SPEED) % CAR_COUNTS[myTypeKey];
+  let myCarImg = carFrames[myTypeKey][myCarIdx];
 
-    // アイテム配列の更新と描画・当たり判定
-    for (let i = items.length - 1; i >= 0; i--) {
-      let itm = items[i];
-      itm.y += itm.speed;
+  if (boostTimer > 0) {
+    let loopLen = TOTAL_NITRO_ACTIVE_FRAMES - LOOP_START_INDEX;
+    let nitroIdx = LOOP_START_INDEX + (floor(frameCount / 4) % loopLen);
+    image(nitroActiveFrames[nitroIdx], playerX, playerY + 35, 48, 64);
+  }
 
-      // 描画
-      if (itm.type === "BOOST") {
-        let idx = floor(frameCount / ITEM_ANIM_SPEED) % TOTAL_NITRO_ITEM_FRAMES;
-        image(nitroItemFrames[idx], itm.x, itm.y, 40, 40);
-      } else if (itm.type === "BARRIER") {
-        let idx = floor(frameCount / ITEM_ANIM_SPEED) % BARRIER_ITEM_TOTAL;
-        image(barrierItemFrames[idx], itm.x, itm.y, 40, 40);
-      } else if (itm.type === "CLONE") {
-        let idx = floor(frameCount / ITEM_ANIM_SPEED) % TOTAL_CLONE_ITEM_FRAMES;
-        image(cloneItemFrames[idx], itm.x, itm.y, 40, 40);
-      }
+  if (cloneTimer > 0) {
+    push();
+    tint(255, 160);
+    image(myCarImg, playerX - 110, playerY, 64, 64);
+    image(myCarImg, playerX + 110, playerY, 64, 64);
+    pop();
+  }
 
-      // 当たり判定
-      let hitItem = checkHitWithClones(itm.x, itm.y, 25);
-      if (hitItem) {
-        playItemSound();
-        if (itm.type === "BOOST") boostTimer = 180;
-        else if (itm.type === "BARRIER") barrierTimer = 180;
-        else if (itm.type === "CLONE") cloneTimer = 300;
+  image(myCarImg, playerX, playerY, 64, 64);
 
-        items.splice(i, 1);
-      } else if (itm.y > height + 40) {
-        items.splice(i, 1);
-      }
-    }
+  if (barrierTimer > 0) {
+    let bIdx = floor(frameCount / ITEM_ANIM_SPEED) % BARRIER_ACTIVE_TOTAL;
+    push();
+    tint(255, 210);
+    image(barrierActiveFrames[bIdx], playerX, playerY, 80, 80);
+    pop();
+  }
 
-    // --- ⑦ 中央線描画 ---
-    stroke(255, 100);
-    strokeWeight(4);
-    line(width / 2, 0, width / 2, height);
-    noStroke();
+  for (let i = effects.length - 1; i >= 0; i--) {
+    effects[i].update();
+    effects[i].display();
+    if (effects[i].isFinished) effects.splice(i, 1);
+  }
 
-    // --- ⑧ 自機・分身・オーラ描画 ---
-    let myTypeKey = charTypes[selectedChar];
-    let myCarIdx = floor(frameCount / CAR_ANIM_SPEED) % CAR_COUNTS[myTypeKey];
-    let myCarImg = carFrames[myTypeKey][myCarIdx];
+  fill(255);
+  textSize(20);
+  textAlign(LEFT, TOP);
+  text("スコア: " + score, 20, 20);
 
-    if (boostTimer > 0) {
-      let loopLen = TOTAL_NITRO_ACTIVE_FRAMES - LOOP_START_INDEX;
-      let nitroIdx = LOOP_START_INDEX + (floor(frameCount / 4) % loopLen);
-      image(nitroActiveFrames[nitroIdx], playerX, playerY + 35, 48, 64);
-    }
+  fill(255, 215, 0);
+  textSize(14);
+  text("ベスト: " + Math.max(score, highScore), 20, 48);
 
-    if (cloneTimer > 0) {
-      push();
-      tint(255, 160);
-      image(myCarImg, playerX - 110, playerY, 64, 64);
-      image(myCarImg, playerX + 110, playerY, 64, 64);
-      pop();
-    }
-
-    image(myCarImg, playerX, playerY, 64, 64);
-
-    if (barrierTimer > 0) {
-      let bIdx = floor(frameCount / ITEM_ANIM_SPEED) % BARRIER_ACTIVE_TOTAL;
-      push();
-      tint(255, 210);
-      image(barrierActiveFrames[bIdx], playerX, playerY, 80, 80);
-      pop();
-    }
-
-    for (let i = effects.length - 1; i >= 0; i--) {
-      effects[i].update();
-      effects[i].display();
-      if (effects[i].isFinished) effects.splice(i, 1);
-    }
-
-    // --- ⑨ UI表示（スコア ＆ ベストスコア） ---
-    fill(255);
-    textSize(20);
-    textAlign(LEFT, TOP);
-    text("スコア: " + score, 20, 20);
-
-    fill(255, 215, 0); // 金色
-    textSize(14);
-    text("ベスト: " + Math.max(score, highScore), 20, 48);
-
-    textSize(14);
-    let uiY = 72;
-    if (boostTimer > 0) {
-      fill(0, 230, 255);
-      text("🚀 スピードUP: " + ceil(boostTimer / 60) + "秒", 20, uiY);
-      uiY += 22;
-    }
-    if (barrierTimer > 0) {
-      fill(50, 255, 100);
-      text("🛡️ バリア: " + ceil(barrierTimer / 60) + "秒", 20, uiY);
-      uiY += 22;
-    }
-    if (cloneTimer > 0) {
-      fill(200, 50, 255);
-      text("👥 分身: " + ceil(cloneTimer / 60) + "秒", 20, uiY);
-    }
-
-  } else if (gameState === "GAMEOVER") {
-    gameOverTimer++;
-
-    fill(255, 50, 50);
-    textSize(36);
-    textAlign(CENTER, CENTER);
-    text("GAME OVER", width / 2, height / 3 - 20); // ★ あえて英語のまま維持！
-
-    fill(255);
-    textSize(22);
-    text("スコア: " + score, width / 2, height / 2 - 40);
-
-    if (isNewRecord) {
-      fill(255, 215, 0);
-      textSize(20);
-      text("🎉 新記録! 🎉", width / 2, height / 2 - 10);
-    } else {
-      fill(200);
-      textSize(16);
-      text("ベストスコア: " + highScore, width / 2, height / 2 - 10);
-    }
-
-    let rank = "D (無免許ドライバー)";
-    if (score >= 3500)      rank = "S+ (神ドライバー)";
-    else if (score >= 2000) rank = "S (伝説のドライバー)";
-    else if (score >= 1000) rank = "A (プロドライバー)";
-    else if (score >= 400)  rank = "B (一般ドライバー)";
-    else if (score >= 100)  rank = "C (教習所ドライバー)";
-
-    textSize(18);
-    fill(255, 215, 0);
-    text("ランク評価: " + rank, width / 2, height * 0.58);
-
-    let alphaVal = map(gameOverTimer, 0, 60, 0, 180, true);
-    textSize(15);
-    fill(180, alphaVal);
-    text("画面タップ または キー入力でタイトルへ", width / 2, height * 0.75);
+  textSize(14);
+  let uiY = 72;
+  if (boostTimer > 0) {
+    fill(0, 230, 255);
+    text("🚀 スピードUP: " + ceil(boostTimer / 60) + "秒", 20, uiY);
+    uiY += 22;
+  }
+  if (barrierTimer > 0) {
+    fill(50, 255, 100);
+    text("🛡️ バリア: " + ceil(barrierTimer / 60) + "秒", 20, uiY);
+    uiY += 22;
+  }
+  if (cloneTimer > 0) {
+    fill(200, 50, 255);
+    text("👥 分身: " + ceil(cloneTimer / 60) + "秒", 20, uiY);
   }
 }
 
 // --------------------------------------------------
-// 4. 操作説明（遊び方）描画
+// 6. 操作説明 ＆ マシン選択 ＆ ゲームオーバー
 // --------------------------------------------------
 function drawHowToPlay() {
   fill(255);
   textSize(28);
   textAlign(CENTER, CENTER);
-  text("遊び方", width / 2, height * 0.15);
+  text("遊び方", GAME_WIDTH / 2, GAME_HEIGHT * 0.15);
 
   stroke(150);
   strokeWeight(2);
-  line(width / 2, height * 0.25, width / 2, height * 0.55);
+  line(GAME_WIDTH / 2, GAME_HEIGHT * 0.25, GAME_WIDTH / 2, GAME_HEIGHT * 0.55);
   noStroke();
 
+  rectMode(CORNER);
   fill(255, 255, 255, 20);
-  rect(width / 4, height * 0.4, width * 0.4, height * 0.3, 10);
-  rect(width * 0.75, height * 0.4, width * 0.4, height * 0.3, 10);
+  rect(GAME_WIDTH * 0.05, GAME_HEIGHT * 0.25, GAME_WIDTH * 0.4, GAME_HEIGHT * 0.3, 10);
+  rect(GAME_WIDTH * 0.55, GAME_HEIGHT * 0.25, GAME_WIDTH * 0.4, GAME_HEIGHT * 0.3, 10);
+  rectMode(CENTER);
 
   fill(255);
   textSize(20);
-  text("← 左に移動", width / 4, height * 0.35);
-  text("右に移動 →", width * 0.75, height * 0.35);
+  text("← 左に移動", GAME_WIDTH / 4, GAME_HEIGHT * 0.35);
+  text("右に移動 →", GAME_WIDTH * 0.75, GAME_HEIGHT * 0.35);
 
   textSize(13);
   fill(200);
-  text("PC: A キー / ← キー\nスマホ: 画面左側長押し", width / 4, height * 0.45);
-  text("PC: D キー / → キー\nスマホ: 画面右側長押し", width * 0.75, height * 0.45);
+  text("PC: A キー / ← キー\nスマホ: 画面左側長押し", GAME_WIDTH / 4, GAME_HEIGHT * 0.45);
+  text("PC: D キー / → キー\nスマホ: 画面右側長押し", GAME_WIDTH * 0.75, GAME_HEIGHT * 0.45);
 
   fill(255);
   textSize(16);
-  let instY = height * 0.62;
-  text("【 操作のコツ 】", width / 2, instY);
+  let instY = GAME_HEIGHT * 0.62;
+  text("【 操作のコツ 】", GAME_WIDTH / 2, instY);
 
   textSize(14);
   fill(220);
-  text("・押し続けるとなめらかに走行できます", width / 2, instY + 35);
-  text("・一瞬タップ／入力することで細かい微調整が可能です", width / 2, instY + 65);
+  text("・押し続けるとなめらかに走行できます", GAME_WIDTH / 2, instY + 35);
+  text("・一瞬タップ／入力することで細かい微調整が可能です", GAME_WIDTH / 2, instY + 65);
 
-  let btnW = min(width * 0.8, 280);
+  let btnW = min(GAME_WIDTH * 0.8, 280);
   fill(0, 180, 255);
-  rect(width / 2, height * 0.85, btnW, 50, 25);
+  rect(GAME_WIDTH / 2, GAME_HEIGHT * 0.85, btnW, 50, 25);
 
   fill(255);
   textSize(18);
-  text("次へ（マシン選択）", width / 2, height * 0.85);
+  text("次へ（マシン選択）", GAME_WIDTH / 2, GAME_HEIGHT * 0.85);
 }
 
-// --------------------------------------------------
-// 5. キャラクター選択画面
-// --------------------------------------------------
 function drawCharacterSelect() {
   fill(255);
   textSize(24);
   textAlign(CENTER, CENTER);
-  text("マシンを選択してください", width / 2, height * 0.10);
+  text("マシンを選択してください", GAME_WIDTH / 2, GAME_HEIGHT * 0.10);
 
   fill(255, 215, 0);
   textSize(15);
-  text("🏆 今までのベストスコア: " + highScore, width / 2, height * 0.16);
+  text("🏆 今までのベストスコア: " + highScore, GAME_WIDTH / 2, GAME_HEIGHT * 0.16);
 
-  let boxWidth = min(width * 0.85, 340);
+  let boxWidth = min(GAME_WIDTH * 0.85, 340);
   let boxHeight = 90;
-  let startY = height * 0.28;
+  let startY = GAME_HEIGHT * 0.28;
 
   for (let i = 0; i < 3; i++) {
     let y = startY + i * 110;
@@ -564,16 +798,16 @@ function drawCharacterSelect() {
     fill(selectedChar === i ? 80 : 40);
     stroke(selectedChar === i ? color(255, 215, 0) : 100);
     strokeWeight(selectedChar === i ? 3 : 1);
-    rect(width / 2, y, boxWidth, boxHeight, 10);
+    rect(GAME_WIDTH / 2, y, boxWidth, boxHeight, 10);
     noStroke();
 
     let fIdx = floor(frameCount / CAR_ANIM_SPEED) % CAR_COUNTS[typeKey];
-    image(carFrames[typeKey][fIdx], width / 2 - boxWidth / 2 + 40, y, 48, 48);
+    image(carFrames[typeKey][fIdx], GAME_WIDTH / 2 - boxWidth / 2 + 40, y, 48, 48);
 
     textAlign(LEFT, CENTER);
     fill(255);
     textSize(18);
-    text(charNames[i], width / 2 - boxWidth / 2 + 75, y - 15);
+    text(charNames[i], GAME_WIDTH / 2 - boxWidth / 2 + 75, y - 15);
 
     fill(180);
     textSize(12);
@@ -581,19 +815,58 @@ function drawCharacterSelect() {
     if (i === 0) sub = "通常アイテムの出現率UP！";
     if (i === 1) sub = "別枠で「分身」アイテムが出現！";
     if (i === 2) sub = "難易度高 / 回避スコア2倍！";
-    text(sub, width / 2 - boxWidth / 2 + 75, y + 15);
+    text(sub, GAME_WIDTH / 2 - boxWidth / 2 + 75, y + 15);
   }
 
   fill(0, 180, 255);
-  rect(width / 2, height * 0.85, boxWidth, 50, 25);
+  rect(GAME_WIDTH / 2, GAME_HEIGHT * 0.85, boxWidth, 50, 25);
   fill(255);
   textSize(20);
   textAlign(CENTER, CENTER);
-  text("このマシンでスタート", width / 2, height * 0.85);
+  text("このマシンでスタート", GAME_WIDTH / 2, GAME_HEIGHT * 0.85);
+}
+
+function drawGameOverScreen() {
+  gameOverTimer++;
+
+  fill(255, 50, 50);
+  textSize(36);
+  textAlign(CENTER, CENTER);
+  text("GAME OVER", GAME_WIDTH / 2, GAME_HEIGHT / 3 - 20);
+
+  fill(255);
+  textSize(22);
+  text("スコア: " + score, GAME_WIDTH / 2, GAME_HEIGHT / 2 - 40);
+
+  if (isNewRecord) {
+    fill(255, 215, 0);
+    textSize(20);
+    text("🎉 新記録! 🎉", GAME_WIDTH / 2, GAME_HEIGHT / 2 - 10);
+  } else {
+    fill(200);
+    textSize(16);
+    text("ベストスコア: " + highScore, GAME_WIDTH / 2, GAME_HEIGHT / 2 - 10);
+  }
+
+  let rank = "D (無免許ドライバー)";
+  if (score >= 3500)      rank = "S+ (神ドライバー)";
+  else if (score >= 2000) rank = "S (伝説のドライバー)";
+  else if (score >= 1000) rank = "A (プロドライバー)";
+  else if (score >= 400)  rank = "B (一般ドライバー)";
+  else if (score >= 100)  rank = "C (教習所ドライバー)";
+
+  textSize(18);
+  fill(255, 215, 0);
+  text("ランク評価: " + rank, GAME_WIDTH / 2, GAME_HEIGHT * 0.58);
+
+  let alphaVal = map(gameOverTimer, 0, 60, 0, 180, true);
+  textSize(15);
+  fill(180, alphaVal);
+  text("画面タップ または キー入力でタイトルへ", GAME_WIDTH / 2, GAME_HEIGHT * 0.75);
 }
 
 // --------------------------------------------------
-// 6. サウンド合成処理
+// 7. サウンド処理 ＆ クラス ＆ イベント
 // --------------------------------------------------
 function initAudio() {
   if (!audioStarted) {
@@ -651,9 +924,6 @@ function playCrashSound() {
   setTimeout(() => { noise.stop(); }, 400);
 }
 
-// --------------------------------------------------
-// 7. パーティクルエフェクトクラス
-// --------------------------------------------------
 class VisualEffect {
   constructor(x, y, framesArray, renderSize = 48) {
     this.x = x;
@@ -683,9 +953,6 @@ class VisualEffect {
   }
 }
 
-// --------------------------------------------------
-// 8. 各種判定 & 操作・イベント関数
-// --------------------------------------------------
 function checkHitWithClones(targetX, targetY, targetSize) {
   let hitRadius = playerSize / 2 + targetSize / 2;
   if (dist(playerX, playerY, targetX, targetY) < hitRadius) return true;
@@ -701,7 +968,9 @@ function checkHitWithClones(targetX, targetY, targetSize) {
 function handleAdvanceState() {
   initAudio();
 
-  if (gameState === "HOWTO") {
+  if (gameState === "TITLE") {
+    gameState = "HOWTO";
+  } else if (gameState === "HOWTO") {
     gameState = "SELECT";
   } else if (gameState === "SELECT") {
     resetGame();
@@ -713,7 +982,7 @@ function handleAdvanceState() {
     startBGM();
   } else if (gameState === "GAMEOVER") {
     if (gameOverTimer >= 60) {
-      gameState = "SELECT";
+      gameState = "TITLE";
     }
   }
 }
@@ -721,24 +990,30 @@ function handleAdvanceState() {
 function mousePressed() {
   initAudio();
 
-  if (gameState === "HOWTO") {
-    let btnW = min(width * 0.8, 280);
-    if (abs(mouseX - width / 2) < btnW / 2 && abs(mouseY - height * 0.85) < 25) {
+  let gMouseX = (mouseX - gameOffsetX) / gameScale;
+  let gMouseY = (mouseY - gameOffsetY) / gameScale;
+
+  if (gameState === "TITLE") {
+    gameState = "HOWTO";
+
+  } else if (gameState === "HOWTO") {
+    let btnW = min(GAME_WIDTH * 0.8, 280);
+    if (abs(gMouseX - GAME_WIDTH / 2) < btnW / 2 && abs(gMouseY - GAME_HEIGHT * 0.85) < 25) {
       gameState = "SELECT";
     }
 
   } else if (gameState === "SELECT") {
-    let boxWidth = min(width * 0.85, 340);
-    let startY = height * 0.28;
+    let boxWidth = min(GAME_WIDTH * 0.85, 340);
+    let startY = GAME_HEIGHT * 0.28;
 
     for (let i = 0; i < 3; i++) {
       let y = startY + i * 110;
-      if (abs(mouseX - width / 2) < boxWidth / 2 && abs(mouseY - y) < 45) {
+      if (abs(gMouseX - GAME_WIDTH / 2) < boxWidth / 2 && abs(gMouseY - y) < 45) {
         selectedChar = i;
       }
     }
 
-    if (abs(mouseX - width / 2) < boxWidth / 2 && abs(mouseY - height * 0.85) < 25) {
+    if (abs(gMouseX - GAME_WIDTH / 2) < boxWidth / 2 && abs(gMouseY - GAME_HEIGHT * 0.85) < 25) {
       resetGame();
       gameState = "START";
     }
@@ -751,7 +1026,7 @@ function mousePressed() {
 
   } else if (gameState === "GAMEOVER") {
     if (gameOverTimer >= 60) {
-      gameState = "SELECT";
+      gameState = "TITLE";
     }
   }
 }
@@ -770,7 +1045,7 @@ function getSafeObstaclePosition(existingObstacles, ignoreIndex = -1) {
   let attempts = 0;
 
   while (isOverlap && attempts < 50) {
-    safeX = random(50, width - 50);
+    safeX = random(50, GAME_WIDTH - 50);
     safeY = random(-350, -60);
     isOverlap = false;
 
@@ -788,26 +1063,24 @@ function getSafeObstaclePosition(existingObstacles, ignoreIndex = -1) {
 }
 
 function spawnCoin() {
-  coinX = random(50, width - 50);
+  coinX = random(50, GAME_WIDTH - 50);
   coinY = random(-200, -100);
   coinSpeed = random(4, 7);
 }
 
-// 枠1: 通常アイテム生成（スピードUP または バリア）
 function spawnNormalItem() {
   let type = random() < 0.5 ? "BOOST" : "BARRIER";
   items.push({
-    x: random(50, width - 50),
+    x: random(50, GAME_WIDTH - 50),
     y: random(-200, -80),
     type: type,
     speed: random(4, 7)
   });
 }
 
-// 枠2: 分身型専用の【別枠】分身アイテム生成
 function spawnCloneItem() {
   items.push({
-    x: random(50, width - 50),
+    x: random(50, GAME_WIDTH - 50),
     y: random(-300, -150),
     type: "CLONE",
     speed: random(4, 7)
@@ -815,8 +1088,8 @@ function spawnCloneItem() {
 }
 
 function resetGame() {
-  playerX = width / 2;
-  playerY = height - 120;
+  playerX = GAME_WIDTH / 2;
+  playerY = GAME_HEIGHT - 120;
 
   obstacles = [];
   items = [];
@@ -836,4 +1109,5 @@ function resetGame() {
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
+  calculateScale();
 }
